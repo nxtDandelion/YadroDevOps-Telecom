@@ -1,0 +1,117 @@
+---
+- name: Install Docker and run python file
+  hosts: all
+  become: yes
+  vars:
+    docker_user: "{{ansible_user_id}}"
+    container_name: "http"
+    image_name: "http_req"
+    build_dir: "/tmp/docker-build"
+  tasks:
+    - name: Install dependencies
+      apt:
+        name: "{{item}}"
+        state: present
+        update_cache: yes
+      loop:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg-agent
+        - software-properties-common
+        - python3
+        - python3-pip
+
+    - name: Add GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu jammy stable
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: "{{item}}"
+        state: latest
+        update_cache: yes
+      loop:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+    - name: Enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add user to Docker group
+      user:
+        name: "{{docker_user}}"
+        groups: docker
+        append: yes
+
+    - name: Check Docker
+      command: docker --version
+      register: docker_ver
+      changed_when: false
+
+    - name: Show Docker Ver
+      debug:
+        var: docker_ver.stdout
+
+    - name: Create directory
+      file:
+        path: "{{build_dir}}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy files
+      copy:
+        src: "{{item}}"
+        dest: "{{build_dir}}/"
+      loop:
+        - main.py
+        - requirements.txt
+        - Dockerfile
+
+    - name: Build Docker Image
+      community.docker.docker_image:
+        name: "{{image_name}}"
+        build:
+          path: "{{build_dir}}"
+          dockerfile: Dockerfile
+        source: build
+      register: build_res
+
+    - name: Show Docker build result
+      debug:
+        var: build_res
+
+    - name: Run Docker container
+      community.docker.docker_container:
+        name: "{{container_name}}"
+        image: "{{image_name}}"
+        state: started
+        detach: false
+      register: container_info
+
+    - name: Get logs
+      command: docker logs {{container_name}}
+      register: container_logs
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display logs
+      debug:
+        msg: "{{container_logs.stdout}}"
+
+    - name: Check container exit
+      assert:
+        that:
+          -container_info.container.State.ExitCode == 0
+        fail_msg: "Container exited with error"
+        success_msg: "Container exited with 0"
